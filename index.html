@@ -114,8 +114,12 @@
       log.textContent = "";
       rows.forEach(function (e) { log.appendChild(render(e)); });
       $("status").textContent = rows.length + " lines";
+      diag("refresh ok: " + rows.length + " rows");
       window.scrollTo(0, document.body.scrollHeight);
-    }).catch(function (err) { $("status").textContent = String(err); });
+    }).catch(function (err) {
+      $("status").textContent = String(err);
+      diag("refresh failed: " + String(err));
+    });
   }
 
   // EventSource can't set Authorization, so tail reads the SSE stream through
@@ -180,9 +184,11 @@
   }
 
   // Beacon for sign-in failures: phones have no devtools, so the gate posts
-  // what it saw and the server logs it.
+  // what it saw and the server logs it. LOAD tags every message with this
+  // page instance, so multi-tab flows are distinguishable in the log.
+  var LOAD = Math.random().toString(36).slice(2, 7);
   function diag(msg) {
-    try { fetch("/uidiag", { method: "POST", body: msg }); } catch (e) {}
+    try { fetch("/uidiag", { method: "POST", body: "[" + LOAD + "] " + msg }); } catch (e) {}
   }
 
   function showGate(err) {
@@ -203,16 +209,33 @@
   ["source", "level", "since"].forEach(function (id) { $(id).onchange = refresh; });
   $("q").addEventListener("keydown", function (ev) { if (ev.key === "Enter") refresh(); });
 
+  // A tab can be sitting on the gate while a sibling tab (or a BFCache
+  // restore) completes the sign-in — the token lands in shared localStorage
+  // but this instance checked it only once. Re-check whenever the token
+  // could have appeared behind our back.
+  function maybeStart(trigger) {
+    if (window.auth && !$("gate").hidden && window.auth.token()) {
+      diag("token appeared via " + trigger);
+      start();
+    }
+  }
+  window.addEventListener("pageshow", function (ev) { if (ev.persisted) maybeStart("pageshow"); });
+  window.addEventListener("focus", function () { maybeStart("focus"); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) maybeStart("visibilitychange"); });
+  window.addEventListener("storage", function (ev) { if (ev.key === "auth_id_token") maybeStart("storage-event"); });
+
   if (!window.auth) {
     showGate("auth.js failed to load from auth.gawaak.ovh — check the console.");
   } else {
     window.auth.ready.then(function () {
+      var q = new URLSearchParams(location.search);
+      diag("load: code=" + !!q.get("code") + " error=" + (q.get("error") || "-") +
+        " token=" + !!window.auth.token() + " ref=" + (document.referrer || "-").slice(0, 60));
       if (window.auth.token()) { start(); return; }
       // No token after the callback settled: say why instead of just
       // re-showing the button. The broker reports refusals via ?error=;
       // a leftover ?code= means the exchange failed or the PKCE verifier
       // was lost (e.g. the flow came back in a different browser context).
-      var q = new URLSearchParams(location.search);
       if (q.get("error")) showGate("Sign-in refused by broker: " + q.get("error"));
       else if (q.get("code")) showGate("Sign-in came back, but the token exchange failed or the session was lost mid-flow. If this page is open in an in-app browser, try it in your regular browser.");
     });
