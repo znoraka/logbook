@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -39,10 +40,18 @@ func (s *server) readAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		// Two dots = shaped like a JWT; try the broker. EmailVerified matters:
 		// the rule is "this mailbox", not "anyone who can claim this string".
+		// Rejections are logged with their reason — a silent 401 here sends
+		// the web UI into a sign-in loop nobody can debug from the outside.
 		if strings.Count(tok, ".") == 2 && s.verifier != nil {
 			c, err := s.verifier.Verify(r.Context(), tok)
-			if err == nil && c.EmailVerified &&
-				(len(s.allowed) == 0 || s.allowed[strings.ToLower(strings.TrimSpace(c.Email))]) {
+			switch {
+			case err != nil:
+				log.Printf("read auth: broker token rejected: %v", err)
+			case !c.EmailVerified:
+				log.Printf("read auth: %s unverified", c.Email)
+			case len(s.allowed) > 0 && !s.allowed[strings.ToLower(strings.TrimSpace(c.Email))]:
+				log.Printf("read auth: %s not in ALLOWED_EMAILS", c.Email)
+			default:
 				next(w, r)
 				return
 			}

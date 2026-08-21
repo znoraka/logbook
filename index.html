@@ -37,6 +37,7 @@
 <div id="gate">
   <div>🪵 logbook</div>
   <button id="signin">Sign in</button>
+  <div id="gateerr" style="color:var(--error); max-width:480px; text-align:center"></div>
 </div>
 <header hidden id="bar">
   <h1>🪵 logbook</h1>
@@ -99,7 +100,13 @@
     stopTail();
     $("status").textContent = "loading…";
     fetch("/api/logs?" + params(), { headers: headers() }).then(function (r) {
-      if (r.status === 401) { window.auth.signOut(); location.reload(); return null; }
+      if (r.status === 401) {
+        // Show the failure instead of reloading — a reload here turns a
+        // rejected token into a silent sign-in loop.
+        window.auth.signOut();
+        showGate("Signed in, but the server refused the token (401) — see logbook container logs for why.");
+        return null;
+      }
       return r.json();
     }).then(function (rows) {
       if (!rows) return;
@@ -171,15 +178,33 @@
     refresh();
   }
 
+  function showGate(err) {
+    stopTail();
+    $("bar").hidden = true;
+    $("gate").hidden = false;
+    $("gateerr").textContent = err || "";
+  }
+
   $("signin").onclick = function () { window.auth.startSignIn(); };
   $("refresh").onclick = refresh;
   $("tail").onclick = function () { tailAbort ? stopTail() : startTail(); };
   ["source", "level", "since"].forEach(function (id) { $(id).onchange = refresh; });
   $("q").addEventListener("keydown", function (ev) { if (ev.key === "Enter") refresh(); });
 
-  (window.auth ? window.auth.ready : Promise.resolve()).then(function () {
-    if (window.auth && window.auth.token()) start();
-  });
+  if (!window.auth) {
+    showGate("auth.js failed to load from auth.gawaak.ovh — check the console.");
+  } else {
+    window.auth.ready.then(function () {
+      if (window.auth.token()) { start(); return; }
+      // No token after the callback settled: say why instead of just
+      // re-showing the button. The broker reports refusals via ?error=;
+      // a leftover ?code= means the exchange failed or the PKCE verifier
+      // was lost (e.g. the flow came back in a different browser context).
+      var q = new URLSearchParams(location.search);
+      if (q.get("error")) showGate("Sign-in refused by broker: " + q.get("error"));
+      else if (q.get("code")) showGate("Sign-in came back, but the token exchange failed or the session was lost mid-flow. If this page is open in an in-app browser, try it in your regular browser.");
+    });
+  }
 })();
 </script>
 </body>
