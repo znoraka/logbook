@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>logbook</title>
+<script src="https://auth.gawaak.ovh/auth.js"></script>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
+          --debug:#6e7681; --info:#c9d1d9; --warn:#d29922; --error:#f85149; --accent:#58a6ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 12px;
+           background:var(--panel); border-bottom:1px solid var(--border);
+           position:sticky; top:0; }
+  header h1 { font-size:14px; margin:0 8px 0 0; font-weight:600; }
+  select, input, button { background:var(--bg); color:var(--fg); border:1px solid var(--border);
+           border-radius:6px; padding:5px 8px; font:inherit; }
+  input#q { flex:1; min-width:120px; }
+  button { cursor:pointer; }
+  button.on { background:var(--accent); color:#0d1117; border-color:var(--accent); }
+  #log { padding:10px 12px 40px; white-space:pre-wrap; word-break:break-word; }
+  .row { padding:1px 0; }
+  .row .t { color:var(--dim); }
+  .row .s { color:var(--accent); }
+  .l0 { color:var(--debug); } .l1 { color:var(--info); }
+  .l2 { color:var(--warn); }  .l3 { color:var(--error); }
+  .row .m { color:var(--dim); }
+  #gate { position:fixed; inset:0; background:var(--bg); display:flex; flex-direction:column;
+          gap:14px; align-items:center; justify-content:center; }
+  #gate button { padding:10px 22px; font-size:14px; }
+  #status { color:var(--dim); margin-left:auto; }
+</style>
+</head>
+<body>
+<div id="gate">
+  <div>🪵 logbook</div>
+  <button id="signin">Sign in</button>
+</div>
+<header hidden id="bar">
+  <h1>🪵 logbook</h1>
+  <select id="source"><option value="">all sources</option></select>
+  <select id="level">
+    <option value="">all levels</option><option>debug</option><option>info</option>
+    <option>warn</option><option>error</option>
+  </select>
+  <select id="since">
+    <option value="15m">15m</option><option value="1h" selected>1h</option>
+    <option value="6h">6h</option><option value="24h">24h</option>
+    <option value="3d">3d</option><option value="14d">14d</option>
+  </select>
+  <input id="q" placeholder="substring…">
+  <button id="refresh">Refresh</button>
+  <button id="tail">Tail</button>
+  <span id="status"></span>
+</header>
+<div id="log"></div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var tailAbort = null;
+
+  function headers() {
+    var h = { "Accept": "application/json" };
+    var tok = window.auth && window.auth.token();
+    if (tok) h["Authorization"] = "Bearer " + tok;
+    return h;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+    });
+  }
+
+  var LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+  function render(e) {
+    var div = document.createElement("div");
+    div.className = "row l" + (LEVELS[e.level] === undefined ? 1 : LEVELS[e.level]);
+    div.innerHTML = '<span class="t">' + esc(e.time) + "</span> " + esc(e.level) +
+      ' <span class="s">' + esc(e.source) + "</span> " + esc(e.msg) +
+      (e.meta ? ' <span class="m">' + esc(JSON.stringify(e.meta)) + "</span>" : "");
+    return div;
+  }
+
+  function params() {
+    var p = new URLSearchParams();
+    if ($("source").value) p.set("source", $("source").value);
+    if ($("level").value) p.set("level", $("level").value);
+    if ($("since").value) p.set("since", $("since").value);
+    if ($("q").value) p.set("q", $("q").value);
+    p.set("limit", "500");
+    return p;
+  }
+
+  function refresh() {
+    stopTail();
+    $("status").textContent = "loading…";
+    fetch("/api/logs?" + params(), { headers: headers() }).then(function (r) {
+      if (r.status === 401) { window.auth.signOut(); location.reload(); return null; }
+      return r.json();
+    }).then(function (rows) {
+      if (!rows) return;
+      var log = $("log");
+      log.textContent = "";
+      rows.forEach(function (e) { log.appendChild(render(e)); });
+      $("status").textContent = rows.length + " lines";
+      window.scrollTo(0, document.body.scrollHeight);
+    }).catch(function (err) { $("status").textContent = String(err); });
+  }
+
+  // EventSource can't set Authorization, so tail reads the SSE stream through
+  // fetch by hand. Lines arrive as "data: <text>" but we re-request each
+  // refresh anyway, so tail just appends raw text lines.
+  function startTail() {
+    stopTail();
+    tailAbort = new AbortController();
+    $("tail").classList.add("on");
+    $("status").textContent = "tailing…";
+    var p = new URLSearchParams();
+    if ($("source").value) p.set("source", $("source").value);
+    if ($("level").value) p.set("level", $("level").value);
+    fetch("/api/tail?" + p, { headers: headers(), signal: tailAbort.signal }).then(function (r) {
+      var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) return;
+          buf += dec.decode(res.value, { stream: true });
+          var lines = buf.split("\n");
+          buf = lines.pop();
+          lines.forEach(function (line) {
+            if (line.indexOf("data: ") !== 0) return;
+            var div = document.createElement("div");
+            div.className = "row";
+            var text = line.slice(6);
+            var lvl = text.split(" ")[1];
+            div.className = "row l" + (LEVELS[lvl] === undefined ? 1 : LEVELS[lvl]);
+            div.textContent = text;
+            $("log").appendChild(div);
+            window.scrollTo(0, document.body.scrollHeight);
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () { /* aborted or dropped; button state already handled */ });
+  }
+
+  function stopTail() {
+    if (tailAbort) { tailAbort.abort(); tailAbort = null; }
+    $("tail").classList.remove("on");
+  }
+
+  function loadSources() {
+    fetch("/api/sources", { headers: headers() }).then(function (r) { return r.json(); })
+      .then(function (stats) {
+        Object.keys(stats).sort().forEach(function (name) {
+          var o = document.createElement("option");
+          o.value = o.textContent = name;
+          $("source").appendChild(o);
+        });
+      }).catch(function () {});
+  }
+
+  function start() {
+    $("gate").hidden = true;
+    $("bar").hidden = false;
+    loadSources();
+    refresh();
+  }
+
+  $("signin").onclick = function () { window.auth.startSignIn(); };
+  $("refresh").onclick = refresh;
+  $("tail").onclick = function () { tailAbort ? stopTail() : startTail(); };
+  ["source", "level", "since"].forEach(function (id) { $(id).onchange = refresh; });
+  $("q").addEventListener("keydown", function (ev) { if (ev.key === "Enter") refresh(); });
+
+  (window.auth ? window.auth.ready : Promise.resolve()).then(function () {
+    if (window.auth && window.auth.token()) start();
+  });
+})();
+</script>
+</body>
+</html>
