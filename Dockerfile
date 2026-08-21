@@ -1,6 +1,7 @@
 # logbook — pure-Go (modernc SQLite), so CGO stays off and the runtime image
 # is a bare alpine with certificates for the notify-relay escalation calls.
-FROM golang:1.25-alpine AS build
+# golang:1.26 because the znoraka/auth module requires go >= 1.26.
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
