@@ -9,6 +9,9 @@
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
           --debug:#6e7681; --info:#c9d1d9; --warn:#d29922; --error:#f85149; --accent:#58a6ff; }
   * { box-sizing: border-box; }
+  /* #gate/#bar set display, which outranks the UA's [hidden] rule — without
+     this, gate.hidden=true never visually removes the overlay. */
+  [hidden] { display: none !important; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 12px;
