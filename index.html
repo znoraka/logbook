@@ -172,10 +172,17 @@
   }
 
   function start() {
+    diag("signed in, starting");
     $("gate").hidden = true;
     $("bar").hidden = false;
     loadSources();
     refresh();
+  }
+
+  // Beacon for sign-in failures: phones have no devtools, so the gate posts
+  // what it saw and the server logs it.
+  function diag(msg) {
+    try { fetch("/uidiag", { method: "POST", body: msg }); } catch (e) {}
   }
 
   function showGate(err) {
@@ -183,9 +190,14 @@
     $("bar").hidden = true;
     $("gate").hidden = false;
     $("gateerr").textContent = err || "";
+    if (err) diag("gate: " + err + " | search=" + location.search.slice(0, 100));
   }
 
-  $("signin").onclick = function () { window.auth.startSignIn(); };
+  $("signin").onclick = function () {
+    if (!window.auth) { showGate("auth.js not loaded — cannot start sign-in"); return; }
+    diag("signin clicked");
+    window.auth.startSignIn();
+  };
   $("refresh").onclick = refresh;
   $("tail").onclick = function () { tailAbort ? stopTail() : startTail(); };
   ["source", "level", "since"].forEach(function (id) { $(id).onchange = refresh; });

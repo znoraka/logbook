@@ -153,6 +153,7 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/tail", s.readAuth(s.handleTail))
 	mux.HandleFunc("POST /api/query", s.readAuth(s.handleQuery))
 	mux.HandleFunc("GET /api/sources", s.readAuth(s.handleSources))
+	mux.HandleFunc("POST /uidiag", s.handleUIDiag)
 	mux.HandleFunc("GET /admin/{key}", s.handleAdmin)
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("GET /{$}", s.handleIndex)

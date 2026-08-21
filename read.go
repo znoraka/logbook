@@ -336,6 +336,18 @@ func (s *server) handleTail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleUIDiag is an unauthenticated, log-only beacon for the web UI's
+// sign-in failure paths — the UI runs on phones with no devtools attached,
+// so the gate posts what it saw and the reason lands in the container log.
+// Hard-capped: 512-byte body, shared rate bucket, never touches the DB.
+func (s *server) handleUIDiag(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 512))
+	if s.allow("_uidiag", time.Now()) {
+		log.Printf("uidiag: %s | ua=%q", strings.ReplaceAll(string(body), "\n", " "), r.UserAgent())
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- admin ---
 
 // handleAdmin exposes counters at an unguessable path (ADMIN_PATH env) — the
